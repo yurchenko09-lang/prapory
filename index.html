@@ -50,7 +50,8 @@
   .setup-form label{ font-family: 'IBM Plex Mono', monospace; font-size: 0.78rem; text-transform: uppercase; color: var(--ink-muted); }
 
   .flag-wrap{ text-align: center; margin: 0.5rem 0 1.5rem; }
-  .flag-wrap img{ max-width: min(100%, 360px); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); }
+  .flag-wrap img{ width: 100%; max-width: 620px; max-height: 46vh; object-fit: contain; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); }
+  .live-counts{ text-align: center; font-family: 'IBM Plex Mono', monospace; font-size: 0.85rem; color: var(--ink-muted); margin: 0 0 1rem; }
 
   .opt-btn{
     display: block; width: 100%; padding: 0.9rem 1rem; font-family: 'Source Sans 3', sans-serif; font-weight: 600;
@@ -66,13 +67,13 @@
   .result-banner.wrong{ background: color-mix(in srgb, var(--myth) 20%, transparent); color: var(--myth); }
   .result-banner.missed{ background: var(--paper); color: var(--ink-muted); border: 1px dashed var(--line); }
 
-  .opt-row{ margin-bottom: 0.7rem; }
-  .opt-row-label{ display: flex; justify-content: space-between; font-size: 0.95rem; margin-bottom: 0.3rem; }
-  .opt-row-label .n{ font-family: 'IBM Plex Mono', monospace; color: var(--ink-muted); }
-  .opt-track{ height: 1.6rem; background: var(--paper); border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
-  .opt-fill{ height: 100%; background: var(--accent); min-width: 2px; transition: width 0.4s ease; }
-  .opt-row.is-correct .opt-row-label{ color: var(--truth); font-weight: 700; }
-  .opt-row.is-correct .opt-fill{ background: var(--truth); }
+  .chart{ display: flex; align-items: flex-end; justify-content: center; gap: 1rem; height: 26vh; min-height: 160px; margin: 0.5rem 0 1.6rem; padding: 0 0.5rem; }
+  .chart-col{ flex: 1 1 0; max-width: 150px; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
+  .chart-col .bar-count{ font-family: 'IBM Plex Mono', monospace; font-weight: 700; font-size: 1.15rem; margin-bottom: 0.4rem; }
+  .chart-col .bar{ width: 100%; background: var(--accent); border-radius: 6px 6px 2px 2px; min-height: 6px; transition: height 0.4s ease; }
+  .chart-col .bar-label{ margin-top: 0.55rem; font-size: 0.82rem; text-align: center; line-height: 1.2; max-width: 100%; overflow-wrap: break-word; }
+  .chart-col.is-correct .bar{ background: var(--truth); }
+  .chart-col.is-correct .bar-count, .chart-col.is-correct .bar-label{ color: var(--truth); font-weight: 700; }
 
   .reveal-banner{ text-align: center; font-family: 'Fraunces', serif; font-weight: 700; font-size: 1.4rem; padding: 1rem; border-radius: 8px; margin-bottom: 1.2rem; background: color-mix(in srgb, var(--truth) 20%, transparent); color: var(--truth); }
   .controls{ display: flex; justify-content: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem; }
@@ -367,8 +368,9 @@
         '<table class="stats"><thead><tr><th>#</th><th>Група</th><th>ПІБ</th><th>✓</th><th>✗</th><th>Пропуск</th></tr></thead><tbody>' + body + '</tbody></table></div>';
     }
 
-    function startScreenHtml(){
+    function startScreenHtml(regCount){
       return '<div class="start-screen"><p class="muted">Гру ще не почато.</p>' +
+        '<p class="muted" id="reg-count">Зареєстровано: ' + regCount + '</p>' +
         '<div class="setup-form"><label for="qcount-input">Кількість питань (10–100)</label>' +
         '<input type="number" id="qcount-input" min="' + MIN_Q + '" max="' + MAX_Q + '" value="20" step="1"></div>' +
         '<div class="controls"><button class="btn" id="start-btn">Почати гру</button></div>' + joinBlockHtml() + '</div>';
@@ -379,12 +381,21 @@
       var meta = await getJson(META_URL);
 
       if (!meta || !meta.order) {
-        // Гру ще не почато: нічого тут не залежить від живих даних, тож поки
-        // викладач не тиснув «Почати гру», екран не перемальовуємо — інакше
-        // періодичний опитувальний цикл (кожні 3с) стирав би введене число.
-        if (startScreenShown) return;
+        // Гру ще не почато: сама розмітка тут не залежить від живих даних, тож поки
+        // викладач не тиснув «Почати гру», екран цілком не перемальовуємо — інакше
+        // періодичний опитувальний цикл (кожні 3с) стирав би введене число. Лічильник
+        // зареєстрованих оновлюємо точково, не чіпаючи поле вводу.
+        if (startScreenShown) {
+          var regEl = document.getElementById('reg-count');
+          if (regEl) {
+            var liveStudents = await getJson(STUDENTS_URL);
+            regEl.textContent = 'Зареєстровано: ' + Object.keys(liveStudents || {}).length;
+          }
+          return;
+        }
         startScreenShown = true;
-        content.innerHTML = startScreenHtml();
+        var initialStudents = await getJson(STUDENTS_URL);
+        content.innerHTML = startScreenHtml(Object.keys(initialStudents || {}).length);
         document.getElementById('start-btn').addEventListener('click', async function(){
           var raw = parseInt(document.getElementById('qcount-input').value, 10);
           if (isNaN(raw)) raw = 20;
@@ -427,18 +438,24 @@
         counts[c]++;
       });
       var totalVotes = Object.keys(curAnswers).length;
+      var studentsCount = Object.keys(students || {}).length;
+      var maxCount = 0;
+      options.forEach(function(o){ var n = counts[o.code] || 0; if (n > maxCount) maxCount = n; });
 
       var html = '<p class="qcount">Прапор ' + (idx + 1) + ' з ' + meta.totalQuestions + '</p>';
+      html += '<p class="live-counts">Зареєстровано: <b>' + studentsCount + '</b> · Відповіли: <b>' + totalVotes + '</b> з ' + studentsCount + '</p>';
       html += '<div class="flag-wrap"><img src="https://flagcdn.com/w320/' + esc(correctCode) + '.png" alt="Прапор"></div>';
 
-      html += options.map(function(o){
+      html += '<div class="chart">' + options.map(function(o){
         var n = counts[o.code] || 0;
-        var pct = totalVotes ? Math.round(n / totalVotes * 100) : 0;
+        var pct = maxCount ? Math.round(n / maxCount * 100) : 0;
+        if (n > 0 && pct < 6) pct = 6;
         var isCorrect = meta.revealed && o.code === correctCode;
-        return '<div class="opt-row' + (isCorrect ? ' is-correct' : '') + '">' +
-          '<div class="opt-row-label"><span>' + esc(o.name) + '</span><span class="n">' + n + '</span></div>' +
-          '<div class="opt-track"><div class="opt-fill" style="width:' + pct + '%"></div></div></div>';
-      }).join('');
+        return '<div class="chart-col' + (isCorrect ? ' is-correct' : '') + '">' +
+          '<div class="bar-count">' + n + '</div>' +
+          '<div class="bar" style="height:' + pct + '%"></div>' +
+          '<div class="bar-label">' + esc(o.name) + '</div></div>';
+      }).join('') + '</div>';
 
       if (meta.revealed) {
         var correctObj = findCountry(correctCode);
