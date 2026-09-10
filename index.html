@@ -62,6 +62,7 @@
   .status-text{ text-align: center; font-family: 'Fraunces', serif; font-style: italic; font-size: 1.15rem; margin: 1.5rem 0; }
   .qcount{ text-align: center; font-family: 'IBM Plex Mono', monospace; font-size: 0.85rem; color: var(--ink-muted); margin-bottom: 1rem; }
   .whoami{ text-align: center; font-family: 'IBM Plex Mono', monospace; font-size: 0.7rem; color: var(--ink-muted); margin-bottom: 1rem; }
+  .whoami .switch-link{ color: var(--accent); text-decoration: underline; }
   .result-banner{ text-align: center; font-family: 'Fraunces', serif; font-weight: 700; font-size: 1.3rem; padding: 1.1rem; border-radius: 10px; }
   .result-banner.correct{ background: color-mix(in srgb, var(--truth) 20%, transparent); color: var(--truth); }
   .result-banner.wrong{ background: color-mix(in srgb, var(--myth) 20%, transparent); color: var(--myth); }
@@ -115,7 +116,7 @@
   var answerUrl = function(idx, id){ return BASE + '/flags/answers/' + idx + '/' + id + '.json'; };
   var STUDENT_URL = location.origin + location.pathname;
   var PIN = '25';
-  var MIN_Q = 10, MAX_Q = 100;
+  var MIN_Q = 1, MAX_Q = 100;
 
   // Редагуйте цей список під ваші реальні групи.
   var GROUPS = ['101', '102', '103'];
@@ -236,19 +237,41 @@
     function setAnswered(idx, code){ try { localStorage.setItem(answeredKey(idx), code); } catch(e){} }
 
     // Кожна нова гра (перший старт або "Почати заново") отримує свій gameId від
-    // викладача. Питання з тим самим номером у новій грі — це вже інший прапор,
-    // тож збережені на телефоні "я вже відповів на №N" з попередньої гри треба
-    // скинути, інакше телефон покаже старий результат замість нового голосування.
+    // викладача, і посилання/QR на цю гру несе його в собі (?g=...). Якщо
+    // телефон бачить ІНШИЙ gameId, ніж той, під яким він реєструвався востаннє,
+    // це справді нова гра — реєстрація та кеш відповідей на цьому телефоні
+    // скидаються, і показується форма заново. Виняток — перехід від "гри ще
+    // немає" (null) до першої реальної гри: студентів, що зареєструвались у
+    // лобі заздалегідь, це не повинно скидати.
     var myGameId = null;
     try { myGameId = localStorage.getItem('flags-game-id'); } catch(e){}
-    function syncGameId(meta){
-      if (!meta || !meta.gameId || meta.gameId === myGameId) return;
+    var urlGameId = null;
+    try { urlGameId = new URLSearchParams(location.search).get('g'); } catch(e){}
+
+    function clearRegistration(){
       try {
+        localStorage.removeItem('flags-student-id');
+        localStorage.removeItem('flags-student-group');
+        localStorage.removeItem('flags-student-name');
         for (var i = 0; i < 200; i++) localStorage.removeItem(answeredKey(i));
-        localStorage.setItem('flags-game-id', meta.gameId);
       } catch(e){}
-      myGameId = meta.gameId;
+      myId = null; myGroup = null; myName = null;
     }
+
+    function syncGameId(gameId, opts){
+      if (!gameId || gameId === myGameId) return false;
+      var isNewRound = myGameId !== null; // null -> перша гра, не рестарт
+      try { localStorage.setItem('flags-game-id', gameId); } catch(e){}
+      myGameId = gameId;
+      if (isNewRound) {
+        var hadRegistration = !!myId;
+        clearRegistration();
+        if (hadRegistration && opts && opts.reloadIfLive) { location.reload(); }
+      }
+      return isNewRound;
+    }
+
+    if (urlGameId) { syncGameId(urlGameId); }
 
     function showRegistration(){
       var opts = '<option value="" disabled selected>Оберіть групу</option>' +
@@ -264,10 +287,17 @@
         var name = document.getElementById('reg-name').value.trim();
         if (!group || !name) return;
         myId = uid(); myGroup = group; myName = name;
+        // Прив'язуємо реєстрацію до гри, яка НАСПРАВДІ зараз йде на сервері
+        // (а не до параметра з посилання, яке міг зберегти телефон ще з
+        // минулого разу) — щоб наступне опитування одразу після реєстрації не
+        // сприйняло її як "стару" і не скинуло щойно заповнену форму.
+        var currentMeta = await getJson(META_URL);
+        if (currentMeta && currentMeta.gameId) myGameId = currentMeta.gameId;
         try {
           localStorage.setItem('flags-student-id', myId);
           localStorage.setItem('flags-student-group', myGroup);
           localStorage.setItem('flags-student-name', myName);
+          if (myGameId) localStorage.setItem('flags-game-id', myGameId);
         } catch (err) {}
         content.innerHTML = '<p class="status-text">Приєднуємось...</p>';
         await putJson(studentUrl(myId), { group: myGroup, name: myName });
@@ -277,16 +307,39 @@
 
     var lastKey = null;
 
-    function whoamiHtml(){ return '<p class="whoami">' + esc(myGroup) + ' · ' + esc(myName) + '</p>'; }
+    function whoamiHtml(){ return '<p class="whoami">' + esc(myGroup) + ' · ' + esc(myName) + ' · <a href="#" id="switch-student" class="switch-link">не я?</a></p>'; }
+
+    // «не я?» — щоб на ОДНОМУ Й ТОМУ Ж телефоні можна було зареєструватися
+    // наново (для тестування, або якщо пристрій передають іншому студенту).
+    // Кнопки на TV («Почати заново» / «Повне скидання») навмисно не чіпають
+    // реєстрацію телефону — інакше справжнім студентам довелось би вводити
+    // ПІБ повторно щоразу, як викладач запускає новий раунд.
+    function bindSwitchLink(){
+      var link = document.getElementById('switch-student');
+      if (!link) return;
+      link.addEventListener('click', function(e){
+        e.preventDefault();
+        try {
+          localStorage.removeItem('flags-student-id');
+          localStorage.removeItem('flags-student-group');
+          localStorage.removeItem('flags-student-name');
+          localStorage.removeItem('flags-game-id');
+          for (var i = 0; i < 200; i++) localStorage.removeItem(answeredKey(i));
+        } catch (err) {}
+        location.reload();
+      });
+    }
 
     function render(meta){
       if (!meta || !meta.order) {
         content.innerHTML = whoamiHtml() + '<p class="status-text">Очікуємо, поки викладач розпочне гру...</p>';
+        bindSwitchLink();
         return;
       }
       var idx = meta.currentIndex;
       if (idx >= meta.totalQuestions) {
         content.innerHTML = whoamiHtml() + '<p class="status-text">Гра завершена. Дякуємо за участь! 🎉</p>';
+        bindSwitchLink();
         return;
       }
       var answered = getAnswered(idx);
@@ -309,6 +362,7 @@
         html += options.map(function(o){ return '<button class="opt-btn" data-code="' + esc(o.code) + '">' + esc(o.name) + '</button>'; }).join('');
       }
       content.innerHTML = html;
+      bindSwitchLink();
       if (!meta.revealed && answered == null) {
         content.querySelectorAll('.opt-btn').forEach(function(btn){
           btn.addEventListener('click', async function(){
@@ -324,7 +378,7 @@
 
     async function poll(){
       var meta = await getJson(META_URL);
-      syncGameId(meta);
+      if (meta && meta.gameId) { syncGameId(meta.gameId, { reloadIfLive: true }); }
       var key = meta ? (meta.gameId + ':' + meta.currentIndex + ':' + meta.revealed + ':' + meta.totalQuestions) : 'none';
       if (key !== lastKey) { lastKey = key; render(meta); }
     }
@@ -349,9 +403,12 @@
       });
     }
 
-    function joinBlockHtml(){
-      var qrSrc = 'https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' + encodeURIComponent(STUDENT_URL);
-      return '<div class="join"><img src="' + qrSrc + '" width="120" height="120" alt="QR-код"><div><p class="muted" style="margin:0 0 0.3rem;">Відскануй або відкрий:</p><p class="link">' + esc(STUDENT_URL) + '</p></div></div>';
+    // Коли передано gameId — посилання/QR веде на адресу саме цієї гри
+    // (?g=...), тож відкривши його, телефон завжди реєструється наново.
+    function joinBlockHtml(gameId){
+      var url = gameId ? (STUDENT_URL + '?g=' + encodeURIComponent(gameId)) : STUDENT_URL;
+      var qrSrc = 'https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' + encodeURIComponent(url);
+      return '<div class="join"><img src="' + qrSrc + '" width="120" height="120" alt="QR-код"><div><p class="muted" style="margin:0 0 0.3rem;">Відскануй або відкрий:</p><p class="link">' + esc(url) + '</p></div></div>';
     }
 
     async function setMeta(newMeta){ await putJson(META_URL, newMeta); }
@@ -387,7 +444,7 @@
     function startScreenHtml(regCount){
       return '<div class="start-screen"><p class="muted">Гру ще не почато.</p>' +
         '<p class="muted" id="reg-count">Зареєстровано: ' + regCount + '</p>' +
-        '<div class="setup-form"><label for="qcount-input">Кількість питань (10–100)</label>' +
+        '<div class="setup-form"><label for="qcount-input">Кількість питань (1–100)</label>' +
         '<input type="number" id="qcount-input" min="' + MIN_Q + '" max="' + MAX_Q + '" value="20" step="1"></div>' +
         '<div class="controls"><button class="btn" id="start-btn">Почати гру</button></div>' + joinBlockHtml() + '</div>';
     }
@@ -480,7 +537,7 @@
       } else {
         html += '<div class="controls"><button class="btn" id="reveal-btn">Показати відповідь (закриє голосування)</button></div>';
       }
-      html += joinBlockHtml();
+      html += joinBlockHtml(meta.gameId);
       html += statsHtml(students, answers, meta);
 
       content.innerHTML = html;
