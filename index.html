@@ -78,6 +78,13 @@
 
   .reveal-banner{ text-align: center; font-family: 'Fraunces', serif; font-weight: 700; font-size: 1.4rem; padding: 1rem; border-radius: 8px; margin-bottom: 1.2rem; background: color-mix(in srgb, var(--truth) 20%, transparent); color: var(--truth); }
   .controls{ display: flex; justify-content: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem; }
+  .tv-question{ padding-bottom: 6.5rem; }
+  .side-action{
+    position: fixed; right: 1rem; bottom: 1.2rem; z-index: 40;
+    display: flex; flex-direction: column; align-items: stretch; gap: 0.6rem;
+    width: min(230px, 42vw);
+  }
+  .side-action .btn{ box-shadow: 0 6px 18px rgba(0,0,0,0.3); font-size: 0.82rem; line-height: 1.3; padding: 0.85rem 0.9rem; }
   .join{ display: flex; align-items: center; gap: 1.2rem; justify-content: center; margin-top: 1.2rem; flex-wrap: wrap; }
   .join img{ border-radius: 8px; border: 1px solid var(--line); }
   .join .link{ font-family: 'IBM Plex Mono', monospace; font-size: 1rem; }
@@ -515,7 +522,8 @@
       var maxCount = 0;
       options.forEach(function(o){ var n = counts[o.code] || 0; if (n > maxCount) maxCount = n; });
 
-      var html = '<p class="qcount">Прапор ' + (idx + 1) + ' з ' + meta.totalQuestions + '</p>';
+      var html = '<div class="tv-question">';
+      html += '<p class="qcount">Прапор ' + (idx + 1) + ' з ' + meta.totalQuestions + '</p>';
       html += '<p class="live-counts">Зареєстровано: <b>' + studentsCount + '</b> · Відповіли: <b>' + totalVotes + '</b> з ' + studentsCount + '</p>';
       html += '<div class="flag-wrap"><img src="https://flagcdn.com/w320/' + esc(correctCode) + '.png" alt="Прапор"></div>';
 
@@ -533,12 +541,15 @@
       if (meta.revealed) {
         var correctObj = findCountry(correctCode);
         html += '<div class="reveal-banner">Правильна відповідь: ' + esc(correctObj ? correctObj.name : correctCode) + '</div>';
-        html += '<div class="controls"><button class="btn" id="next-btn">Наступний прапор →</button></div>';
-      } else {
-        html += '<div class="controls"><button class="btn" id="reveal-btn">Показати відповідь (закриє голосування)</button></div>';
       }
       html += joinBlockHtml(meta.gameId);
       html += statsHtml(students, answers, meta);
+      html += '</div>';
+      if (meta.revealed) {
+        html += '<div class="side-action"><button class="btn" id="next-btn">Наступний прапор →</button></div>';
+      } else {
+        html += '<div class="side-action"><button class="btn" id="reveal-btn">Показати відповідь (закриє голосування)</button></div>';
+      }
 
       content.innerHTML = html;
       if (meta.revealed) {
